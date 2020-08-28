@@ -544,20 +544,52 @@ class BuildGenerator : ProjectGenerator {
 			}
 			runPreRunCommands(m_project.rootPackage, m_project, settings, buildsettings);
 			logInfo("Running %s %s", exe_path_string, run_args.join(" "));
+
+			auto exec = exe_path_string ~ run_args;
+			if(settings.gdb){
+				auto gdb = environment.get("DUB_DEBUGGER", "gdb");
+				exec = [gdb, "--args"] ~ exec;
+			}
+
+
 			if (settings.runCallback) {
-				auto res = execute(exe_path_string ~ run_args);
+				import std.typecons : Tuple;
+				Tuple!(int, "status", string, "output") res;
+				ignoreSigInt({
+					res = execute(exec);
+				});
 				settings.runCallback(res.status, res.output);
 				settings.targetExitStatus = res.status;
 				runPostRunCommands(m_project.rootPackage, m_project, settings, buildsettings);
 			} else {
-				auto prg_pid = spawnProcess(exe_path_string ~ run_args);
-				auto result = prg_pid.wait();
+				int result;
+				ignoreSigInt({
+					auto prg_pid = spawnProcess(exec);
+					result = prg_pid.wait();
+				});
 				settings.targetExitStatus = result;
 				runPostRunCommands(m_project.rootPackage, m_project, settings, buildsettings);
 				enforce(result == 0, "Program exited with code "~to!string(result));
 			}
 		} else
 			enforce(false, "Target is a library. Skipping execution.");
+	}
+
+	private void ignoreSigInt(scope void delegate() func)
+	{
+		version(Posix)
+		{
+			import core.sys.posix.signal;
+
+			sigaction_t oldact;
+			sigaction_t act;
+			act.sa_handler = SIG_IGN;
+			sigaction(SIGINT, &act, &oldact);
+			scope(exit) sigaction(SIGINT, &oldact, null);
+			func();
+		}
+		else
+			func();
 	}
 
 	private void runPreRunCommands(in Package pack, in Project proj, in GeneratorSettings settings,
